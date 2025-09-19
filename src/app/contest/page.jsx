@@ -1,6 +1,8 @@
 "use client";
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Trophy, BookOpen, Clock, Zap, RefreshCw, AlertTriangle } from 'lucide-react';
+import Footer from '@/components/ui/Footer';
+import Navbar from '@/components/ui/Navbar';
 
 const ContestPage = () => {
   const [user, setUser] = useState(null);
@@ -372,6 +374,7 @@ const ContestPage = () => {
 
     return (
       <div className="flex justify-center items-center min-h-screen bg-gradient-to-br from-gray-900 via-green-900 to-blue-900 text-white p-4">
+        <Navbar />
         <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 border border-green-500/50 shadow-2xl text-center max-w-md">
           <Trophy className="w-20 h-20 text-yellow-400 mx-auto mb-4" />
           <h2 className="text-3xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-green-400 bg-clip-text text-transparent">
@@ -495,6 +498,7 @@ const ContestPage = () => {
           )}
         </div>
       </div>
+      <Footer/>
     </div>
   );
 };
