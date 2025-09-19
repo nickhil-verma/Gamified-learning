@@ -14,6 +14,11 @@ const ContestPage = () => {
   const [error, setError] = useState(null);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
   
+  // New state for instant verdict
+  const [selectedOption, setSelectedOption] = useState(null);
+  const [isCorrect, setIsCorrect] = useState(null);
+  const [showNextButton, setShowNextButton] = useState(false);
+
   // Rate limiting state
   const [requestCount, setRequestCount] = useState(0);
   const [lastRequestTime, setLastRequestTime] = useState(0);
@@ -37,13 +42,11 @@ const ContestPage = () => {
   const checkRateLimit = useCallback(() => {
     const now = Date.now();
     
-    // Reset counter if window has passed
     if (now - lastRequestTime > RATE_LIMIT_WINDOW) {
       setRequestCount(0);
       setRateLimitHit(false);
     }
     
-    // Check if too many requests
     if (requestCount >= MAX_REQUESTS_PER_MINUTE) {
       setRateLimitHit(true);
       const timeToWait = RATE_LIMIT_WINDOW - (now - lastRequestTime);
@@ -51,7 +54,6 @@ const ContestPage = () => {
       return false;
     }
     
-    // Check minimum interval
     if (now - lastRequestTime < MIN_REQUEST_INTERVAL) {
       return false;
     }
@@ -59,23 +61,19 @@ const ContestPage = () => {
     return true;
   }, [requestCount, lastRequestTime]);
 
-  // Update rate limit counters
   const updateRateLimit = useCallback(() => {
     const now = Date.now();
     setRequestCount(prev => prev + 1);
     setLastRequestTime(now);
   }, []);
 
-  // Fetch user data with retry logic
   const fetchUser = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
       const response = await fetch(`${API_BASE_URL}/me`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
       
       if (!response.ok) {
@@ -85,11 +83,9 @@ const ContestPage = () => {
       const userData = await response.json();
       setUser(userData);
       
-      // Auto-generate questions if user is loaded and no questions exist
       if (questions.length === 0) {
-        setTimeout(() => generateQuestions(userData), 500); // Small delay to avoid rapid requests
+        setTimeout(() => generateQuestions(userData), 500); 
       }
-      
     } catch (e) {
       console.error("Error fetching user data:", e);
       setError('Failed to load user profile. Please ensure the backend is running.');
@@ -98,14 +94,12 @@ const ContestPage = () => {
     }
   }, [token, questions.length]);
 
-  // Optimized question generation with better error handling and caching
   const generateQuestions = useCallback(async (userData = user) => {
     if (!userData) {
       setError('User data not available');
       return;
     }
 
-    // Check rate limits
     if (!checkRateLimit()) {
       if (rateLimitHit) {
         setError(`Rate limit exceeded. Please wait ${retryAfter} seconds before generating new questions.`);
@@ -163,7 +157,7 @@ const ContestPage = () => {
       }
     };
 
-    const maxRetries = 2; // Reduced retries to prevent excessive requests
+    const maxRetries = 2;
     let lastError = null;
 
     for (let retryCount = 0; retryCount < maxRetries; retryCount++) {
@@ -182,7 +176,6 @@ const ContestPage = () => {
           setRetryAfter(Math.ceil(delay / 1000));
           setError(`Rate limit exceeded. Please wait ${Math.ceil(delay / 1000)} seconds before trying again.`);
           
-          // Don't retry immediately on rate limit
           break;
         }
 
@@ -199,12 +192,10 @@ const ContestPage = () => {
 
         const questionsData = JSON.parse(jsonText);
         
-        // Validate questions structure
         if (!Array.isArray(questionsData) || questionsData.length !== numQuestions) {
           throw new Error('Invalid questions format received from API.');
         }
 
-        // Validate each question
         for (const q of questionsData) {
           if (!q.q || !Array.isArray(q.options) || q.options.length !== 4 || !q.answer) {
             throw new Error('Invalid question structure received from API.');
@@ -219,68 +210,93 @@ const ContestPage = () => {
         setScore(0);
         setQuizFinished(false);
         setGeneratingQuestions(false);
-        return; // Success, exit the function
-        
+        return;
       } catch (e) {
         console.error(`Attempt ${retryCount + 1} failed:`, e);
         lastError = e;
         
-        // Wait before retry (but don't wait on last attempt)
         if (retryCount < maxRetries - 1) {
           await new Promise(res => setTimeout(res, 1000 * (retryCount + 1)));
         }
       }
     }
     
-    // All retries failed
     setError(`Failed to generate quiz questions: ${lastError?.message || 'Unknown error'}. Please try again in a moment.`);
     setGeneratingQuestions(false);
   }, [user, checkRateLimit, rateLimitHit, retryAfter, updateRateLimit]);
-
-  // Handle answer selection
-  const handleAnswer = useCallback((selectedOption) => {
-    if (selectedOption === questions[currentQuestionIndex].answer) {
-      setScore(prev => prev + 1);
-    }
-    
-    const nextQuestionIndex = currentQuestionIndex + 1;
-    if (nextQuestionIndex < questions.length) {
-      setCurrentQuestionIndex(nextQuestionIndex);
-    } else {
-      setQuizFinished(true);
-      updateUserXp();
-    }
-  }, [questions, currentQuestionIndex]);
-
-  // Update user XP with error handling
-  const updateUserXp = useCallback(async () => {
+  
+  const handleCorrectAnswer = useCallback(async (questionText, answerText) => {
     try {
-      if (!user?.id) {
-        console.error('User data is not available.');
-        return;
+      const response = await fetch(`${API_BASE_URL}/me`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        throw new Error('Failed to fetch user data for update.');
       }
+      const latestUser = await response.json();
       
-      const newXp = user.xp + (score * 10);
-      const response = await fetch(`${API_BASE_URL}/user`, {
+      const newXp = latestUser.xp + 10;
+      const newQuestionsSolved = latestUser.questionsSolved + 1;
+      
+      const putResponse = await fetch(`${API_BASE_URL}/user`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ xp: newXp }),
+        body: JSON.stringify({ 
+          xp: newXp,
+          questionsSolved: newQuestionsSolved,
+          questions: [{
+            questionDescription: questionText,
+            questionType: "objective",
+            correctAnswer: answerText,
+            userAnswer: answerText,
+            isCorrect: true,
+          }]
+        })
       });
       
-      if (!response.ok) {
-        throw new Error('Failed to update user XP.');
+      if (!putResponse.ok) {
+        throw new Error('Failed to update user profile on server.');
       }
       
-      const updatedUser = await response.json();
-      setUser(prev => ({ ...prev, xp: newXp }));
-      console.log('XP updated successfully:', updatedUser);
+      const updatedUser = await putResponse.json();
+      setUser(updatedUser.user);
+      console.log('XP and questions solved updated successfully:', updatedUser.user);
     } catch (e) {
-      console.error("Error updating user XP:", e);
+      console.error("Error updating user data:", e);
     }
-  }, [user, score, token]);
+  }, [token]);
+
+  // Handle answer selection - refactored for instant verdict
+  const handleAnswer = useCallback((selectedOption) => {
+    if (selectedOption) {
+      const isUserCorrect = selectedOption === questions[currentQuestionIndex].answer;
+      setSelectedOption(selectedOption);
+      setIsCorrect(isUserCorrect);
+      setShowNextButton(true);
+
+      if (isUserCorrect) {
+        setScore(prev => prev + 1);
+        handleCorrectAnswer(questions[currentQuestionIndex].q, questions[currentQuestionIndex].answer);
+      }
+    }
+  }, [questions, currentQuestionIndex, handleCorrectAnswer]);
+
+  // Handle moving to the next question
+  const handleNextQuestion = useCallback(() => {
+    const nextQuestionIndex = currentQuestionIndex + 1;
+    if (nextQuestionIndex < questions.length) {
+      setCurrentQuestionIndex(nextQuestionIndex);
+      setSelectedOption(null);
+      setIsCorrect(null);
+      setShowNextButton(false);
+    } else {
+      setQuizFinished(true);
+    }
+  }, [currentQuestionIndex, questions.length]);
+
 
   // Restart quiz
   const restartQuiz = useCallback(() => {
@@ -288,6 +304,9 @@ const ContestPage = () => {
     setScore(0);
     setQuizFinished(false);
     setError(null);
+    setSelectedOption(null);
+    setIsCorrect(null);
+    setShowNextButton(false);
     generateQuestions();
   }, [generateQuestions]);
 
@@ -315,12 +334,12 @@ const ContestPage = () => {
   // Loading state
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 text-white">
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 border border-white/20 shadow-2xl">
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 text-gray-900">
+        <div className="bg-white rounded-xl p-8 border border-gray-200 shadow-xl">
           <div className="flex flex-col items-center space-y-4">
-            <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-400"></div>
+            <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-green-600"></div>
             <p className="text-xl font-medium">Loading your profile...</p>
-            <p className="text-sm text-gray-300">Preparing personalized quiz</p>
+            <p className="text-sm text-gray-500">Preparing personalized quiz</p>
           </div>
         </div>
       </div>
@@ -330,13 +349,13 @@ const ContestPage = () => {
   // Error state
   if (error && !generatingQuestions) {
     return (
-      <div className="flex justify-center items-center min-h-screen bg-gradient-to-br from-gray-900 via-red-900 to-purple-900 text-white p-4">
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 border border-red-500/50 shadow-2xl text-center max-w-md">
-          <AlertTriangle className="w-16 h-16 text-red-400 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold mb-4 text-red-300">Error</h2>
-          <p className="mb-6 text-gray-200">{error}</p>
+      <div className="flex justify-center items-center min-h-screen bg-gray-50 text-gray-900 p-4">
+        <div className="bg-white rounded-xl p-8 border border-red-500/50 shadow-xl text-center max-w-md">
+          <AlertTriangle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold mb-4 text-red-600">Error</h2>
+          <p className="mb-6 text-gray-700">{error}</p>
           {rateLimitHit && (
-            <p className="mb-4 text-yellow-300 font-medium">
+            <p className="mb-4 text-sky-500 font-medium">
               Please wait {retryAfter} seconds before trying again
             </p>
           )}
@@ -352,8 +371,8 @@ const ContestPage = () => {
             disabled={rateLimitHit}
             className={`px-6 py-3 rounded-lg font-medium transition-all duration-300 ${
               rateLimitHit 
-                ? 'bg-gray-600 cursor-not-allowed' 
-                : 'bg-green-600 hover:bg-green-700 transform hover:scale-105'
+                ? 'bg-gray-400 cursor-not-allowed' 
+                : 'bg-green-600 text-white hover:bg-green-700 transform hover:scale-105'
             }`}
           >
             {rateLimitHit ? `Wait ${retryAfter}s` : 'Try Again'}
@@ -367,32 +386,32 @@ const ContestPage = () => {
   if (quizFinished) {
     const percentage = Math.round((score / questions.length) * 100);
     const performanceMessage = 
-      percentage >= 80 ? "Outstanding performance!" :
-      percentage >= 60 ? "Good job!" :
-      percentage >= 40 ? "Not bad, keep improving!" :
-      "Keep practicing!";
+      percentage >= 80 ? "Outstanding performance! 🏆" :
+      percentage >= 60 ? "Good job! 👍" :
+      percentage >= 40 ? "Not bad, keep improving! 🌱" :
+      "Keep practicing! 💪";
 
     return (
-      <div className="flex justify-center items-center min-h-screen bg-gradient-to-br from-gray-900 via-green-900 to-blue-900 text-white p-4">
-        <Navbar />
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 border border-green-500/50 shadow-2xl text-center max-w-md">
-          <Trophy className="w-20 h-20 text-yellow-400 mx-auto mb-4" />
-          <h2 className="text-3xl font-bold mb-4 bg-gradient-to-r from-yellow-400 to-green-400 bg-clip-text text-transparent">
+      <div className="flex justify-center items-center min-h-screen bg-gray-50 text-gray-900 p-4">
+ 
+        <div className="bg-white rounded-xl p-8 border border-green-600/50 shadow-xl text-center max-w-md">
+          <Trophy className="w-20 h-20 text-sky-500 mx-auto mb-4" />
+          <h2 className="text-3xl font-bold mb-4 text-green-600">
             Quiz Complete!
           </h2>
           <div className="space-y-3 mb-6">
-            <p className="text-2xl font-bold">{score} out of {questions.length}</p>
-            <p className="text-xl text-green-300">{percentage}% Correct</p>
-            <p className="text-gray-300">{performanceMessage}</p>
-            <p className="text-sm text-blue-300">+{score * 10} XP earned!</p>
+            <p className="text-2xl font-bold text-gray-800">{score} out of {questions.length}</p>
+            <p className="text-xl text-green-600">{percentage}% Correct</p>
+            <p className="text-gray-600">{performanceMessage}</p>
+            <p className="text-sm text-sky-500">+{score * 10} XP earned!</p>
           </div>
           <button 
             onClick={restartQuiz} 
             disabled={rateLimitHit}
             className={`px-8 py-4 rounded-lg font-medium text-lg transition-all duration-300 ${
               rateLimitHit
-                ? 'bg-gray-600 cursor-not-allowed'
-                : 'bg-gradient-to-r from-green-600 to-blue-600 hover:from-green-500 hover:to-blue-500 transform hover:scale-105'
+                ? 'bg-gray-400 cursor-not-allowed text-gray-700'
+                : 'bg-green-600 text-white hover:bg-green-700 transform hover:scale-105'
             }`}
           >
             {rateLimitHit ? `Wait ${retryAfter}s` : 'Take Another Quiz'}
@@ -405,12 +424,12 @@ const ContestPage = () => {
   // Quiz generation state
   if (generatingQuestions || questions.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-blue-900 text-white">
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 border border-white/20 shadow-2xl">
+      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50 text-gray-900">
+        <div className="bg-white rounded-xl p-8 border border-gray-200 shadow-xl">
           <div className="flex flex-col items-center space-y-4">
-            <RefreshCw className="w-16 h-16 text-purple-400 animate-spin" />
+            <RefreshCw className="w-16 h-16 text-sky-500 animate-spin" />
             <p className="text-xl font-medium">Generating personalized quiz...</p>
-            <p className="text-sm text-gray-300">
+            <p className="text-sm text-gray-500">
               Creating questions based on your level: {user?.standard || 'N/A'}
             </p>
           </div>
@@ -422,75 +441,102 @@ const ContestPage = () => {
   const currentQuestion = questions[currentQuestionIndex];
   
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 text-white p-4">
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
+    <div className="min-h-screen bg-gray-50 text-gray-900 p-4 relative">
+      <Navbar />
+      <div className="max-w-4xl mx-auto pt-20">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+          <h1 className="text-4xl font-bold mb-2 text-green-600">
             Eco Knowledge Challenge
           </h1>
-          <p className="text-gray-300">Test your environmental knowledge and earn XP!</p>
+          <p className="text-gray-600">Test your environmental knowledge and earn XP!</p>
         </div>
 
-        {/* Progress and Stats */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-6 mb-8 border border-white/20">
+        <div className="bg-white rounded-xl p-6 mb-8 border border-gray-200 shadow-xl">
           <div className="flex justify-between items-center mb-4">
             <div className="flex items-center space-x-4">
               <div className="flex items-center space-x-2">
-                <BookOpen className="w-5 h-5 text-blue-400" />
+                <BookOpen className="w-5 h-5 text-sky-500" />
                 <span className="font-medium">Question {currentQuestionIndex + 1} / {questions.length}</span>
               </div>
               <div className="flex items-center space-x-2">
-                <Trophy className="w-5 h-5 text-yellow-400" />
+                <Trophy className="w-5 h-5 text-green-600" />
                 <span className="font-medium">Score: {score}</span>
               </div>
             </div>
-            <div className="flex items-center space-x-4 text-sm text-gray-300">
+            <div className="flex items-center space-x-4 text-sm text-gray-600">
               <div>XP: {user?.xp || 0}</div>
               <div>Level: {user?.standard || 'N/A'}</div>
             </div>
           </div>
           
-          {/* Progress Bar */}
-          <div className="w-full bg-white/20 rounded-full h-2">
+          <div className="w-full bg-gray-200 rounded-full h-2">
             <div 
-              className="bg-gradient-to-r from-blue-400 to-purple-400 h-2 rounded-full transition-all duration-300"
+              className="bg-green-600 h-2 rounded-full transition-all duration-300"
               style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}
             ></div>
           </div>
         </div>
 
-        {/* Question Card */}
-        <div className="bg-white/10 backdrop-blur-lg rounded-xl p-8 border border-white/20 shadow-xl">
+        <div className="bg-white rounded-xl p-8 border border-gray-200 shadow-xl">
           <div className="mb-8">
-            <h2 className="text-2xl md:text-3xl font-bold text-center mb-6 leading-relaxed">
+            <h2 className="text-2xl md:text-3xl font-bold text-center mb-6 leading-relaxed text-gray-800">
               {currentQuestion.q}
             </h2>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {currentQuestion.options.map((option, index) => (
-                <button
-                  key={index}
-                  onClick={() => handleAnswer(option)}
-                  className="group bg-white/5 hover:bg-white/20 border border-white/20 hover:border-blue-400/50 rounded-xl p-6 text-left transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg"
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 bg-white/10 group-hover:bg-blue-400/20 rounded-full flex items-center justify-center font-bold text-sm transition-colors duration-300">
-                      {String.fromCharCode(65 + index)}
+              {currentQuestion.options.map((option, index) => {
+                const isCorrectOption = option === currentQuestion.answer;
+                const isSelected = option === selectedOption;
+
+                let buttonClasses = "bg-white border border-gray-200 text-gray-900 hover:border-sky-500";
+
+                if (selectedOption) {
+                  if (isCorrectOption) {
+                    buttonClasses = "bg-green-100 border-2 border-green-600 text-green-600";
+                  } else if (isSelected) {
+                    buttonClasses = "bg-red-100 border-2 border-red-600 text-red-600";
+                  }
+                }
+
+                return (
+                  <button
+                    key={index}
+                    onClick={() => !selectedOption && handleAnswer(option)}
+                    disabled={!!selectedOption}
+                    className={`group rounded-xl p-6 text-left transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg ${buttonClasses}`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
+                        isCorrectOption && selectedOption ? 'bg-green-600 text-white' : 
+                        !isCorrectOption && isSelected ? 'bg-red-600 text-white' : 
+                        'bg-gray-200 text-gray-600 group-hover:bg-sky-500 group-hover:text-white'
+                      }`}>
+                        {String.fromCharCode(65 + index)}
+                      </div>
+                      <span className="font-medium text-lg">{option}</span>
                     </div>
-                    <span className="font-medium text-lg">{option}</span>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
+
+            {showNextButton && (
+              <div className="mt-8 text-center">
+                <button
+                  onClick={handleNextQuestion}
+                  className="px-8 py-4 rounded-lg font-medium text-lg bg-sky-500 text-white hover:bg-sky-600 transition-colors transform hover:scale-105"
+                >
+                  {currentQuestionIndex + 1 < questions.length ? 'Next Question' : 'Finish Quiz'}
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Rate limit warning */}
           {rateLimitHit && (
-            <div className="mt-6 p-4 bg-yellow-800/20 border border-yellow-600/50 rounded-lg">
+            <div className="mt-6 p-4 bg-sky-100 border border-sky-500 rounded-lg">
               <div className="flex items-center space-x-2">
-                <Clock className="w-5 h-5 text-yellow-400" />
-                <p className="text-yellow-200">
+                <Clock className="w-5 h-5 text-sky-500" />
+                <p className="text-sky-900">
                   Rate limit reached. New quiz generation available in {retryAfter} seconds.
                 </p>
               </div>
