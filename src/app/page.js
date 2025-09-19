@@ -1,3 +1,4 @@
+import AiAssistant from "@/components/ui/Aiassistant";
 import Features from "@/components/ui/Features";
 import Footer from "@/components/ui/Footer";
 import Hero from "@/components/ui/Hero";
@@ -10,6 +11,7 @@ export default function Home() {
       <Navbar/>
       <Hero/>
       <Features/>
+      <AiAssistant/>
       <Footer/>
      </section>
   );
